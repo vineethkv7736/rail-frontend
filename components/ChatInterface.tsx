@@ -10,7 +10,7 @@ import LiveStatusCard from './LiveStatusCard';
 import LanguageSelector from './LanguageSelector';
 import VoiceInput from './VoiceInput';
 import { detectLanguage, translateToEnglish, translateFromEnglish, getLanguageName } from '@/lib/translation';
-import { speakText, stopSpeaking, loadVoices } from '@/lib/speech';
+import { synthesizeSpeech, getSpeechLanguageCode } from '@/lib/googleSpeech';
 
 interface Message {
     id: string;
@@ -31,6 +31,7 @@ export default function ChatInterface() {
     const isMutedRef = useRef(isMuted); // Track latest state for async callbacks
     const [showDebug, setShowDebug] = useState(false);
     const [selectedLanguage, setSelectedLanguage] = useState('auto');
+    const [continuousListening, setContinuousListening] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [sessionId, setSessionId] = useState(() => {
         if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
@@ -39,6 +40,7 @@ export default function ChatInterface() {
         return Date.now().toString(); // Fallback
     });
     const [inputMode, setInputMode] = useState<'voice' | 'typing'>('voice'); // Start with voice mode
+    const currentAudioRef = useRef<HTMLAudioElement | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const scrollToBottom = () => {
@@ -54,16 +56,15 @@ export default function ChatInterface() {
         isMutedRef.current = isMuted;
         if (isMuted) {
             api.pauseAudio();
-            stopSpeaking();
+            // Stop Google TTS audio
+            if (currentAudioRef.current) {
+                currentAudioRef.current.pause();
+                currentAudioRef.current = null;
+            }
         } else {
             api.resumeAudio();
         }
     }, [isMuted]);
-
-    // Load voices on mount
-    useEffect(() => {
-        loadVoices();
-    }, []);
 
     // Helper function to check if message is a conversation reset trigger
     const isResetTrigger = (text: string): boolean => {
@@ -99,7 +100,10 @@ export default function ChatInterface() {
         
         // Stop any playing audio
         api.stopAudio();
-        stopSpeaking();
+        if (currentAudioRef.current) {
+            currentAudioRef.current.pause();
+            currentAudioRef.current = null;
+        }
     };
 
     const handleSend = async (textInput?: string, detectedLang?: string) => {
@@ -175,11 +179,22 @@ export default function ChatInterface() {
 
             setMessages(prev => [...prev, assistantMessage]);
 
-            // Always use browser TTS for audio output in user's language
-            // Backend does not provide audio, so we rely on Web Speech API
-            console.log('Speaking text:', responseText, 'in language:', userLanguage);
+            // Use Google Cloud TTS for audio output in user's language
+            console.log('Synthesizing speech:', responseText, 'in language:', userLanguage);
             if (!isMutedRef.current) {
-                speakText(responseText, userLanguage);
+                try {
+                    const speechLanguageCode = getSpeechLanguageCode(userLanguage);
+                    const audioUrl = await synthesizeSpeech(responseText, speechLanguageCode, 'Standard');
+                    
+                    // Play the audio
+                    const audio = new Audio(audioUrl);
+                    currentAudioRef.current = audio;
+                    audio.play().catch(err => {
+                        console.error('Audio playback error:', err);
+                    });
+                } catch (err) {
+                    console.error('Speech synthesis error:', err);
+                }
             }
         } catch (error) {
             console.error('Chat error:', error);
@@ -253,6 +268,22 @@ export default function ChatInterface() {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {/* Continuous Listening Toggle */}
+            <div className="flex items-center justify-center gap-2 mb-2 sm:mb-3">
+                <button
+                    onClick={() => setContinuousListening(!continuousListening)}
+                    className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm transition-all ${
+                        continuousListening 
+                            ? 'bg-railway-orange/20 text-railway-orange border border-railway-orange/50' 
+                            : 'bg-white/5 text-gray-400 border border-white/10 hover:bg-white/10'
+                    }`}
+                >
+                    <Mic className="w-3 h-3 sm:w-4 sm:h-4" />
+                    <span className="hidden sm:inline">{continuousListening ? 'Continuous Listening ON' : 'Continuous Listening OFF'}</span>
+                    <span className="sm:hidden">{continuousListening ? 'Always ON' : 'Manual'}</span>
+                </button>
+            </div>
 
             {/* Chat Area - Improved Mobile Scrolling */}
             <div className="flex-1 overflow-y-auto space-y-3 sm:space-y-4 pr-1 sm:pr-2 hide-scrollbar pb-4">
@@ -355,6 +386,7 @@ export default function ChatInterface() {
                         onTranscript={handleVoiceInput}
                         onError={handleVoiceError}
                         disabled={isLoading || inputMode === 'typing'}
+                        continuousMode={continuousListening}
                     />
                     <input
                         type="text"

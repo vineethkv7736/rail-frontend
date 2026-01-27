@@ -1,150 +1,170 @@
-         'use client';
+'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Mic, MicOff } from 'lucide-react';
-import { 
-    createSpeechRecognition, 
-    isSpeechRecognitionSupported,
-    getSpeechRecognitionLanguage,
-    type SpeechRecognitionResult 
-} from '@/lib/speech';
+import { Mic, MicOff, Loader2 } from 'lucide-react';
+import { AudioRecorder } from '@/lib/audioRecorder';
+import { transcribeAudio, getSpeechLanguageCode, isSpeechAPIConfigured } from '@/lib/googleSpeech';
 
 interface VoiceInputProps {
     language: string;
     onTranscript: (transcript: string, language: string) => void;
     onError?: (error: string) => void;
     disabled?: boolean;
+    continuousMode?: boolean;
 }
 
-export default function VoiceInput({ language, onTranscript, onError, disabled }: VoiceInputProps) {
-    const [isListening, setIsListening] = useState(false);
-    const [isSupported] = useState(isSpeechRecognitionSupported());
-    const recognitionRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+export default function VoiceInput({ language, onTranscript, onError, disabled, continuousMode = false }: VoiceInputProps) {
+    const [isRecording, setIsRecording] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [isSupported] = useState(() => {
+        return typeof window !== 'undefined' && 
+               navigator.mediaDevices && 
+               navigator.mediaDevices.getUserMedia !== undefined;
+    });
+    const [isConfigured] = useState(isSpeechAPIConfigured());
+    const audioRecorderRef = useRef<AudioRecorder | null>(null);
+    const continuousModeRef = useRef(continuousMode);
 
+    // Update ref when continuousMode changes
     useEffect(() => {
-        // Cleanup on unmount
+        continuousModeRef.current = continuousMode;
+    }, [continuousMode]);
+
+    // Auto-start when continuous mode is enabled
+    useEffect(() => {
+        if (continuousMode && !disabled && isSupported && isConfigured && !isRecording && !isProcessing) {
+            const timer = setTimeout(() => {
+                startRecording();
+            }, 300);
+            return () => clearTimeout(timer);
+        } else if (!continuousMode && isRecording) {
+            // Stop if continuous mode is turned off
+            stopRecording();
+        }
+    }, [continuousMode, disabled]);
+
+    // Cleanup on unmount
+    useEffect(() => {
         return () => {
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                } catch (e) {
-                    // Ignore errors on cleanup
-                }
-                recognitionRef.current = null;
+            if (audioRecorderRef.current) {
+                audioRecorderRef.current.cleanup();
             }
         };
     }, []);
 
-    const startListening = () => {
+    const startRecording = async () => {
         if (!isSupported) {
-            onError?.('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
+            onError?.('Microphone not supported in your browser.');
             return;
         }
 
-        if (isListening) {
-            return; // Already listening
-        }
-
-        // Determine language for recognition
-        const recognitionLanguage = language === 'auto' 
-            ? 'hi-IN' // Default to Hindi for auto-detect
-            : getSpeechRecognitionLanguage(language);
-
-        const recognition = createSpeechRecognition({
-            language: recognitionLanguage,
-            continuous: false, // Single utterance mode
-            interimResults: true,
-            maxAlternatives: 1,
-        });
-
-        if (!recognition) {
-            onError?.('Failed to initialize speech recognition');
+        if (!isConfigured) {
+            onError?.('Google Speech API not configured. Please add API key to .env.local');
             return;
         }
 
-        recognitionRef.current = recognition;
-
-        recognition.onstart = () => {
-            console.log('Speech recognition started');
-            setIsListening(true);
-        };
-
-        recognition.onresult = (event: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-            const result = event.results[event.results.length - 1];
-            const transcript = result[0].transcript;
-            const isFinal = result.isFinal;
-
-            console.log('Speech result:', { transcript, isFinal });
-
-            if (isFinal && transcript.trim()) {
-                onTranscript(transcript, language);
-                // Stop after getting final result
-                if (recognitionRef.current) {
-                    recognitionRef.current.stop();
-                }
-            }
-        };
-
-        recognition.onerror = (event: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-            console.error('Speech recognition error:', event.error);
-            setIsListening(false);
-            
-            let errorMessage = 'Speech recognition error';
-            switch (event.error) {
-                case 'no-speech':
-                    errorMessage = 'No speech detected. Please try again.';
-                    break;
-                case 'audio-capture':
-                    errorMessage = 'Microphone not accessible. Please check permissions.';
-                    break;
-                case 'not-allowed':
-                    errorMessage = 'Microphone permission denied. Please allow microphone access.';
-                    break;
-                case 'network':
-                    errorMessage = 'Network error. Please check your connection.';
-                    break;
-                case 'aborted':
-                    // User manually stopped, don't show error
-                    return;
-                default:
-                    errorMessage = `Speech recognition error: ${event.error}`;
-            }
-            
-            onError?.(errorMessage);
-        };
-
-        recognition.onend = () => {
-            console.log('Speech recognition ended');
-            setIsListening(false);
-            recognitionRef.current = null;
-        };
+        if (isRecording || isProcessing) {
+            return;
+        }
 
         try {
-            recognition.start();
+            // Initialize audio recorder
+            if (!audioRecorderRef.current) {
+                audioRecorderRef.current = new AudioRecorder();
+                await audioRecorderRef.current.initialize();
+            }
+
+            // Start recording
+            audioRecorderRef.current.startRecording();
+            setIsRecording(true);
+            console.log('Recording started');
+
+            // In manual mode, auto-stop after 10 seconds
+            // In continuous mode, auto-stop after 5 seconds to process
+            const maxDuration = continuousModeRef.current ? 5000 : 10000;
+            setTimeout(() => {
+                if (audioRecorderRef.current?.isRecording()) {
+                    stopRecording();
+                }
+            }, maxDuration);
+
         } catch (error) {
-            console.error('Failed to start recognition:', error);
-            setIsListening(false);
-            onError?.('Failed to start speech recognition. Please try again.');
+            console.error('Failed to start recording:', error);
+            setIsRecording(false);
+            onError?.(error instanceof Error ? error.message : 'Failed to start recording');
         }
     };
 
-    const stopListening = () => {
-        if (recognitionRef.current) {
-            try {
-                recognitionRef.current.stop();
-            } catch (e) {
-                console.error('Error stopping recognition:', e);
+    const stopRecording = async () => {
+        if (!audioRecorderRef.current || !isRecording) {
+            return;
+        }
+
+        try {
+            setIsRecording(false);
+            setIsProcessing(true);
+
+            // Stop recording and get audio blob
+            const audioBlob = await audioRecorderRef.current.stopRecording();
+            console.log('Recording stopped, processing...');
+
+            // Get language code for Speech API
+            const speechLanguageCode = language === 'auto' 
+                ? 'hi-IN' // Default to Hindi
+                : getSpeechLanguageCode(language);
+
+            // Transcribe audio using Google Speech-to-Text
+            const result = await transcribeAudio(audioBlob, speechLanguageCode);
+            console.log('Transcription result:', result);
+
+            if (result.transcript) {
+                onTranscript(result.transcript, language);
+            } else {
+                onError?.('No speech detected. Please try again.');
+            }
+
+            setIsProcessing(false);
+
+            // In continuous mode, restart recording
+            if (continuousModeRef.current && !disabled) {
+                setTimeout(() => {
+                    if (continuousModeRef.current && !disabled) {
+                        startRecording();
+                    }
+                }, 500);
+            }
+
+        } catch (error) {
+            console.error('Transcription error:', error);
+            setIsProcessing(false);
+            
+            const errorMessage = error instanceof Error 
+                ? error.message 
+                : 'Failed to transcribe audio';
+            onError?.(errorMessage);
+
+            // In continuous mode, retry after error
+            if (continuousModeRef.current && !disabled) {
+                setTimeout(() => {
+                    if (continuousModeRef.current && !disabled) {
+                        startRecording();
+                    }
+                }, 2000);
             }
         }
-        setIsListening(false);
     };
 
     const handleClick = () => {
-        if (isListening) {
-            stopListening();
-        } else {
-            startListening();
+        if (continuousMode) {
+            // In continuous mode, button doesn't do anything
+            return;
+        }
+
+        if (isRecording) {
+            stopRecording();
+        } else if (!isProcessing) {
+            startRecording();
         }
     };
 
@@ -153,7 +173,19 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
             <button
                 disabled
                 className="p-2 rounded-full bg-white/5 text-gray-600 cursor-not-allowed"
-                title="Speech recognition not supported"
+                title="Microphone not supported"
+            >
+                <MicOff className="w-5 h-5" />
+            </button>
+        );
+    }
+
+    if (!isConfigured) {
+        return (
+            <button
+                disabled
+                className="p-2 rounded-full bg-white/5 text-gray-600 cursor-not-allowed"
+                title="Google Speech API not configured"
             >
                 <MicOff className="w-5 h-5" />
             </button>
@@ -163,18 +195,32 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
     return (
         <motion.button
             onClick={handleClick}
-            disabled={disabled}
+            disabled={disabled || continuousMode || isProcessing}
             className={`relative p-2 rounded-full transition-all ${
-                isListening
+                isRecording
                     ? 'bg-red-500 text-white'
+                    : isProcessing
+                    ? 'bg-blue-500 text-white'
                     : disabled
                     ? 'bg-white/5 text-gray-600 cursor-not-allowed'
+                    : continuousMode
+                    ? 'bg-railway-orange/20 text-railway-orange cursor-default'
                     : 'bg-white/5 hover:bg-white/10 text-railway-blue'
             }`}
-            title={isListening ? 'Listening... (click to stop)' : 'Click to start listening'}
-            whileTap={{ scale: 0.95 }}
+            title={
+                isProcessing
+                    ? 'Processing audio...'
+                    : continuousMode 
+                    ? 'Continuous mode active (use toggle to disable)' 
+                    : isRecording 
+                    ? 'Recording... (click to stop)' 
+                    : 'Click to start recording'
+            }
+            whileTap={continuousMode || isProcessing ? {} : { scale: 0.95 }}
         >
-            {isListening ? (
+            {isProcessing ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+            ) : isRecording ? (
                 <>
                     <Mic className="w-5 h-5" />
                     {/* Pulsing animation */}
