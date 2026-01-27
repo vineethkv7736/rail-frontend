@@ -4,26 +4,34 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, User, Bot, Loader2, Volume2, VolumeX, Code } from 'lucide-react';
+import { Send, User, Bot, Loader2, Volume2, VolumeX, Code, AlertCircle } from 'lucide-react';
 import { api, ChatResponse } from '@/lib/api';
 import LiveStatusCard from './LiveStatusCard';
+import LanguageSelector from './LanguageSelector';
+import VoiceInput from './VoiceInput';
+import { detectLanguage, translateToEnglish, translateFromEnglish, getLanguageName } from '@/lib/translation';
+import { speakText, stopSpeaking, loadVoices } from '@/lib/speech';
 
 interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    originalContent?: string; // Content before translation
+    language?: string; // Language code
     data?: any; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 export default function ChatInterface() {
     const [messages, setMessages] = useState<Message[]>([
-        { id: '1', role: 'assistant', content: 'Welcome to RailPro! How can I help you with your journey today?' }
+        { id: '1', role: 'assistant', content: 'Welcome to RailPro! How can I help you with your journey today?', language: 'en' }
     ]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const isMutedRef = useRef(isMuted); // Track latest state for async callbacks
     const [showDebug, setShowDebug] = useState(false);
+    const [selectedLanguage, setSelectedLanguage] = useState('auto');
+    const [error, setError] = useState<string | null>(null);
     const [sessionId] = useState(() => {
         if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
             return window.crypto.randomUUID();
@@ -45,52 +53,112 @@ export default function ChatInterface() {
         isMutedRef.current = isMuted;
         if (isMuted) {
             api.pauseAudio();
+            stopSpeaking();
         } else {
             api.resumeAudio();
         }
     }, [isMuted]);
 
-    const handleSend = async () => {
-        if (!input.trim() || isLoading) return;
+    // Load voices on mount
+    useEffect(() => {
+        loadVoices();
+    }, []);
 
-        const userMessage: Message = {
-            id: Date.now().toString(),
-            role: 'user',
-            content: input
-        };
+    const handleSend = async (textInput?: string, detectedLang?: string) => {
+        const messageText = textInput || input.trim();
+        if (!messageText || isLoading) return;
 
-        setMessages(prev => [...prev, userMessage]);
-        setInput('');
+        setError(null);
         setIsLoading(true);
 
         try {
+            // Determine the language
+            let userLanguage = detectedLang || selectedLanguage;
+            let originalText = messageText;
+            let englishText = messageText;
+
+            // Auto-detect language if needed
+            if (userLanguage === 'auto') {
+                const detection = await detectLanguage(messageText);
+                userLanguage = detection.language;
+            }
+
+            // Translate to English if not already English
+            if (userLanguage !== 'en') {
+                const translation = await translateToEnglish(messageText, userLanguage);
+                englishText = translation.translatedText;
+                if (translation.detectedSourceLanguage) {
+                    userLanguage = translation.detectedSourceLanguage;
+                }
+            }
+
+            const userMessage: Message = {
+                id: Date.now().toString(),
+                role: 'user',
+                content: originalText,
+                originalContent: userLanguage !== 'en' ? originalText : undefined,
+                language: userLanguage
+            };
+
+            setMessages(prev => [...prev, userMessage]);
+            setInput('');
+
+            // Send English text to API
             const response = await api.chat({
-                message: userMessage.content,
+                message: englishText,
                 session_id: sessionId
             });
+
+            // Translate response back to user's language
+            let responseText = response.response;
+            if (userLanguage !== 'en') {
+                responseText = await translateFromEnglish(response.response, userLanguage);
+            }
 
             const assistantMessage: Message = {
                 id: (Date.now() + 1).toString(),
                 role: 'assistant',
-                content: response.response,
+                content: responseText,
+                originalContent: userLanguage !== 'en' ? response.response : undefined,
+                language: userLanguage,
                 data: response.debug_info?.raw_api_response
             };
 
             setMessages(prev => [...prev, assistantMessage]);
 
-            // Always load audio, but only play if not muted
-            if (response.audio_url) {
-                api.playAudio(response.audio_url, !isMutedRef.current);
+            // Play audio response using browser TTS
+            // Note: Server audio_url can be used if available, but fallback to TTS
+            if (!isMutedRef.current) {
+                if (response.audio_url) {
+                    // If server provides audio, use it (works for any language)
+                    api.playAudio(response.audio_url, true);
+                } else {
+                    // Fallback to Web Speech API for TTS in user's language
+                    speakText(responseText, userLanguage);
+                }
             }
         } catch (error) {
+            console.error('Chat error:', error);
             setMessages(prev => [...prev, {
                 id: (Date.now() + 1).toString(),
                 role: 'assistant',
-                content: "I'm sorry, I'm having trouble connecting to the server. Please try again."
+                content: "I'm sorry, I'm having trouble connecting to the server. Please try again.",
+                language: 'en'
             }]);
         } finally {
             setIsLoading(false);
         }
+    };
+
+    const handleVoiceInput = (transcript: string, language: string) => {
+        setInput(transcript);
+        // Auto-send voice input
+        handleSend(transcript, language);
+    };
+
+    const handleVoiceError = (errorMessage: string) => {
+        setError(errorMessage);
+        setTimeout(() => setError(null), 5000);
     };
 
     return (
@@ -104,6 +172,10 @@ export default function ChatInterface() {
 
                 {/* Controls */}
                 <div className="flex items-center gap-2">
+                    <LanguageSelector 
+                        selectedLanguage={selectedLanguage}
+                        onLanguageChange={setSelectedLanguage}
+                    />
                     <button
                         onClick={() => setShowDebug(!showDebug)}
                         className={`p-2 rounded-full transition-colors ${showDebug ? 'bg-railway-blue/20 text-railway-blue' : 'text-gray-400 hover:text-gray-600'}`}
@@ -114,12 +186,27 @@ export default function ChatInterface() {
                     <button
                         onClick={() => setIsMuted(!isMuted)}
                         className={`p-2 rounded-full transition-colors ${isMuted ? 'text-gray-400' : 'text-railway-blue'}`}
-                        title={isMuted ? "Unmute TTS" : "Mute TTS"}
+                        title={isMuted ? "Unmute Audio" : "Mute Audio"}
                     >
                         {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                     </button>
                 </div>
             </div>
+
+            {/* Error Banner */}
+            <AnimatePresence>
+                {error && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="mb-4 p-3 glass-card border-l-4 border-l-red-500 flex items-center gap-2 text-sm"
+                    >
+                        <AlertCircle className="w-4 h-4 text-red-400" />
+                        <span className="text-red-200">{error}</span>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* Chat Area */}
             <div className="flex-1 overflow-y-auto space-y-4 pr-2 hide-scrollbar pb-20">
@@ -141,6 +228,14 @@ export default function ChatInterface() {
                                     {msg.role === 'assistant' && (
                                         <Bot className="w-5 h-5 absolute -left-8 top-2 text-railway-blue opacity-80" />
                                     )}
+                                    
+                                    {/* Language indicator */}
+                                    {msg.language && msg.language !== 'en' && (
+                                        <div className="text-xs opacity-60 mb-2">
+                                            {getLanguageName(msg.language)}
+                                        </div>
+                                    )}
+                                    
                                     <div className="prose prose-invert max-w-none text-sm leading-relaxed">
                                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                             {msg.content}
@@ -194,6 +289,12 @@ export default function ChatInterface() {
             {/* Input Area */}
             <div className="mt-4 relative">
                 <div className="glass p-2 rounded-full flex items-center gap-2 px-4 shadow-2xl">
+                    <VoiceInput
+                        language={selectedLanguage}
+                        onTranscript={handleVoiceInput}
+                        onError={handleVoiceError}
+                        disabled={isLoading}
+                    />
                     <input
                         type="text"
                         value={input}
@@ -204,7 +305,7 @@ export default function ChatInterface() {
                         disabled={isLoading}
                     />
                     <button
-                        onClick={handleSend}
+                        onClick={() => handleSend()}
                         disabled={isLoading || !input.trim()}
                         className={`p-3 rounded-full transition-all ${input.trim() ? 'bg-railway-orange text-white shadow-lg' : 'bg-white/5 text-gray-500'
                             }`}
