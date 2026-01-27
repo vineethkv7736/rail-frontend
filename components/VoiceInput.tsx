@@ -21,25 +21,17 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
     const [isListening, setIsListening] = useState(false);
     const [isSupported] = useState(isSpeechRecognitionSupported());
     const recognitionRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const shouldAutoStartRef = useRef(true);
-
-    // Auto-start listening when component mounts or when re-enabled
-    useEffect(() => {
-        if (!disabled && isSupported && shouldAutoStartRef.current) {
-            // Small delay to ensure component is ready
-            const timer = setTimeout(() => {
-                startListening();
-            }, 500);
-            return () => clearTimeout(timer);
-        }
-    }, [disabled, isSupported]);
 
     useEffect(() => {
         // Cleanup on unmount
         return () => {
-            shouldAutoStartRef.current = false;
             if (recognitionRef.current) {
-                recognitionRef.current.stop();
+                try {
+                    recognitionRef.current.stop();
+                } catch (e) {
+                    // Ignore errors on cleanup
+                }
+                recognitionRef.current = null;
             }
         };
     }, []);
@@ -50,6 +42,10 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
             return;
         }
 
+        if (isListening) {
+            return; // Already listening
+        }
+
         // Determine language for recognition
         const recognitionLanguage = language === 'auto' 
             ? 'hi-IN' // Default to Hindi for auto-detect
@@ -57,7 +53,7 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
 
         const recognition = createSpeechRecognition({
             language: recognitionLanguage,
-            continuous: true, // Enable continuous listening
+            continuous: false, // Single utterance mode
             interimResults: true,
             maxAlternatives: 1,
         });
@@ -70,6 +66,7 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
         recognitionRef.current = recognition;
 
         recognition.onstart = () => {
+            console.log('Speech recognition started');
             setIsListening(true);
         };
 
@@ -78,9 +75,14 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
             const transcript = result[0].transcript;
             const isFinal = result.isFinal;
 
+            console.log('Speech result:', { transcript, isFinal });
+
             if (isFinal && transcript.trim()) {
                 onTranscript(transcript, language);
-                // Don't stop - keep listening continuously
+                // Stop after getting final result
+                if (recognitionRef.current) {
+                    recognitionRef.current.stop();
+                }
             }
         };
 
@@ -102,6 +104,9 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
                 case 'network':
                     errorMessage = 'Network error. Please check your connection.';
                     break;
+                case 'aborted':
+                    // User manually stopped, don't show error
+                    return;
                 default:
                     errorMessage = `Speech recognition error: ${event.error}`;
             }
@@ -110,15 +115,9 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
         };
 
         recognition.onend = () => {
+            console.log('Speech recognition ended');
             setIsListening(false);
-            // Auto-restart if not disabled and component is still mounted
-            if (!disabled && shouldAutoStartRef.current) {
-                setTimeout(() => {
-                    if (!disabled && shouldAutoStartRef.current) {
-                        startListening();
-                    }
-                }, 500);
-            }
+            recognitionRef.current = null;
         };
 
         try {
@@ -126,13 +125,17 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
         } catch (error) {
             console.error('Failed to start recognition:', error);
             setIsListening(false);
-            onError?.('Failed to start speech recognition');
+            onError?.('Failed to start speech recognition. Please try again.');
         }
     };
 
     const stopListening = () => {
         if (recognitionRef.current) {
-            recognitionRef.current.stop();
+            try {
+                recognitionRef.current.stop();
+            } catch (e) {
+                console.error('Error stopping recognition:', e);
+            }
         }
         setIsListening(false);
     };
