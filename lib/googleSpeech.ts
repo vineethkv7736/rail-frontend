@@ -1,6 +1,6 @@
 // Google Cloud Speech-to-Text and Text-to-Speech API client
 
-const SPEECH_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_SPEECH_API_KEY;
+const SPEECH_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_TRANSLATE_API_KEY;
 const SPEECH_TO_TEXT_URL = 'https://speech.googleapis.com/v1/speech:recognize';
 const TEXT_TO_SPEECH_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
 
