@@ -1,4 +1,4 @@
-'use client';
+         'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
@@ -21,10 +21,23 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
     const [isListening, setIsListening] = useState(false);
     const [isSupported] = useState(isSpeechRecognitionSupported());
     const recognitionRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const shouldAutoStartRef = useRef(true);
+
+    // Auto-start listening when component mounts or when re-enabled
+    useEffect(() => {
+        if (!disabled && isSupported && shouldAutoStartRef.current) {
+            // Small delay to ensure component is ready
+            const timer = setTimeout(() => {
+                startListening();
+            }, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [disabled, isSupported]);
 
     useEffect(() => {
         // Cleanup on unmount
         return () => {
+            shouldAutoStartRef.current = false;
             if (recognitionRef.current) {
                 recognitionRef.current.stop();
             }
@@ -44,7 +57,7 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
 
         const recognition = createSpeechRecognition({
             language: recognitionLanguage,
-            continuous: false,
+            continuous: true, // Enable continuous listening
             interimResults: true,
             maxAlternatives: 1,
         });
@@ -65,9 +78,9 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
             const transcript = result[0].transcript;
             const isFinal = result.isFinal;
 
-            if (isFinal) {
+            if (isFinal && transcript.trim()) {
                 onTranscript(transcript, language);
-                recognition.stop();
+                // Don't stop - keep listening continuously
             }
         };
 
@@ -98,6 +111,14 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
 
         recognition.onend = () => {
             setIsListening(false);
+            // Auto-restart if not disabled and component is still mounted
+            if (!disabled && shouldAutoStartRef.current) {
+                setTimeout(() => {
+                    if (!disabled && shouldAutoStartRef.current) {
+                        startListening();
+                    }
+                }, 500);
+            }
         };
 
         try {
@@ -147,7 +168,7 @@ export default function VoiceInput({ language, onTranscript, onError, disabled }
                     ? 'bg-white/5 text-gray-600 cursor-not-allowed'
                     : 'bg-white/5 hover:bg-white/10 text-railway-blue'
             }`}
-            title={isListening ? 'Stop recording' : 'Start voice input'}
+            title={isListening ? 'Listening... (click to stop)' : 'Click to start listening'}
             whileTap={{ scale: 0.95 }}
         >
             {isListening ? (

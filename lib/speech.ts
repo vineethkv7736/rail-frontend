@@ -109,6 +109,8 @@ export function speakText(
     onEnd?: () => void,
     onError?: (error: Error) => void
 ): void {
+    console.log('🔊 speakText called with:', { text, languageCode });
+    
     if (!isSpeechSynthesisSupported()) {
         console.warn('Speech synthesis not supported');
         onError?.(new Error('Speech synthesis not supported'));
@@ -120,13 +122,24 @@ export function speakText(
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = getSpeechRecognitionLanguage(languageCode);
+    
+    console.log('🗣️ Utterance created:', {
+        text: utterance.text,
+        lang: utterance.lang,
+        languageCode
+    });
 
     // Try to find a voice for the language
     const voices = getVoicesForLanguage(languageCode);
+    console.log(`🎤 Found ${voices.length} voices for language ${languageCode}:`, voices.map(v => v.name));
+    
     if (voices.length > 0) {
         // Prefer local voices, then remote
         const localVoice = voices.find(v => v.localService);
         utterance.voice = localVoice || voices[0];
+        console.log('✅ Selected voice:', utterance.voice?.name, utterance.voice?.lang);
+    } else {
+        console.warn('⚠️ No voices found for language:', languageCode);
     }
 
     // Set speech parameters
@@ -144,6 +157,7 @@ export function speakText(
         onError?.(new Error(event.error));
     };
 
+    console.log('🎵 Starting speech...');
     window.speechSynthesis.speak(utterance);
 }
 
