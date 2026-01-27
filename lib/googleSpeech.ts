@@ -80,6 +80,50 @@ export async function transcribeAudio(
 /**
  * Convert text to speech using Google Cloud Text-to-Speech API
  */
+/**
+ * Clean text for speech by removing markdown formatting
+ */
+function cleanTextForSpeech(text: string): string {
+    let cleaned = text;
+
+    // Remove markdown tables (lines with |)
+    cleaned = cleaned.split('\n')
+        .filter(line => !line.trim().startsWith('|'))
+        .join('\n');
+
+    // Remove markdown headers (# ## ###)
+    cleaned = cleaned.replace(/^#{1,6}\s+/gm, '');
+
+    // Remove bold/italic markers (** __ * _)
+    cleaned = cleaned.replace(/(\*\*|__)(.*?)\1/g, '$2');
+    cleaned = cleaned.replace(/(\*|_)(.*?)\1/g, '$2');
+
+    // Remove links [text](url) -> text
+    cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+    // Remove inline code `code` -> code
+    cleaned = cleaned.replace(/`([^`]+)`/g, '$1');
+
+    // Remove code blocks
+    cleaned = cleaned.replace(/```[\s\S]*?```/g, '');
+
+    // Remove horizontal rules (---, ***)
+    cleaned = cleaned.replace(/^[\-*]{3,}$/gm, '');
+
+    // Remove blockquotes (>)
+    cleaned = cleaned.replace(/^>\s+/gm, '');
+
+    // Remove list markers (-, *, 1., etc.)
+    cleaned = cleaned.replace(/^[\s]*[-*+]\s+/gm, '');
+    cleaned = cleaned.replace(/^[\s]*\d+\.\s+/gm, '');
+
+    // Remove extra whitespace and newlines
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+    cleaned = cleaned.trim();
+
+    return cleaned;
+}
+
 export async function synthesizeSpeech(
     text: string,
     languageCode: string,
@@ -90,6 +134,9 @@ export async function synthesizeSpeech(
     }
 
     try {
+        // Clean text to remove markdown formatting
+        const cleanedText = cleanTextForSpeech(text);
+
         // Get voice name for language
         const voiceName = getVoiceName(languageCode, voiceType);
 
@@ -100,7 +147,7 @@ export async function synthesizeSpeech(
             },
             body: JSON.stringify({
                 input: {
-                    text,
+                    text: cleanedText,
                 },
                 voice: {
                     languageCode,
