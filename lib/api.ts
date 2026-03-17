@@ -1,6 +1,5 @@
 import axios from 'axios';
-
-const API_URL = 'https://railpro-backend-c5hg2weg6q-uc.a.run.app/api/v1';
+const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export interface ChatRequest {
     message: string;

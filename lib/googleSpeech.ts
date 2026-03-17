@@ -21,7 +21,8 @@ export interface Voice {
  */
 export async function transcribeAudio(
     audioBlob: Blob,
-    languageCode: string
+    languageCode: string,
+    alternativeLanguageCodes?: string[]
 ): Promise<TranscriptionResult> {
     if (!SPEECH_API_KEY) {
         throw new Error('Google Speech API key not configured');
@@ -34,19 +35,26 @@ export async function transcribeAudio(
         // Determine audio encoding from mime type
         const encoding = getAudioEncoding(audioBlob.type);
 
+        // Build config with optional alternative languages
+        const config: Record<string, unknown> = {
+            encoding,
+            sampleRateHertz: 48000,
+            languageCode,
+            enableAutomaticPunctuation: true,
+            model: 'default',
+        };
+
+        if (alternativeLanguageCodes && alternativeLanguageCodes.length > 0) {
+            config.alternativeLanguageCodes = alternativeLanguageCodes;
+        }
+
         const response = await fetch(`${SPEECH_TO_TEXT_URL}?key=${SPEECH_API_KEY}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                config: {
-                    encoding,
-                    sampleRateHertz: 48000,
-                    languageCode,
-                    enableAutomaticPunctuation: true,
-                    model: 'default',
-                },
+                config,
                 audio: {
                     content: base64Audio,
                 },

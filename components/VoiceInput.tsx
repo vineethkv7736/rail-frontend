@@ -110,12 +110,27 @@ export default function VoiceInput({ language, onTranscript, onError, disabled, 
             console.log('Recording stopped, processing...');
 
             // Get language code for Speech API
-            const speechLanguageCode = language === 'auto' 
-                ? 'hi-IN' // Default to Hindi
-                : getSpeechLanguageCode(language);
+            // All supported Indian languages for auto-detection
+            const allIndianLanguages = [
+                'ml-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN',
+                'mr-IN', 'gu-IN', 'kn-IN', 'pa-IN', 'ur-IN',
+                'en-IN', 'en-US'
+            ];
+
+            let speechLanguageCode: string;
+            let altLanguages: string[] | undefined;
+
+            if (language === 'auto') {
+                // Use Malayalam as primary, with all others as alternatives
+                speechLanguageCode = 'ml-IN';
+                altLanguages = allIndianLanguages.filter(l => l !== 'ml-IN');
+            } else {
+                speechLanguageCode = getSpeechLanguageCode(language);
+                altLanguages = undefined;
+            }
 
             // Transcribe audio using Google Speech-to-Text
-            const result = await transcribeAudio(audioBlob, speechLanguageCode);
+            const result = await transcribeAudio(audioBlob, speechLanguageCode, altLanguages);
             console.log('Transcription result:', result);
 
             if (result.transcript) {
